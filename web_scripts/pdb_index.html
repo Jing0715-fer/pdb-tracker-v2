@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDB Structure Tracker</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --border: #334155;
+            --text: #f1f5f9;
+            --muted: #94a3b8;
+            --primary: #06b6d4;
+            --secondary: #8b5cf6;
+            --accent: #f59e0b;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --mono: 'SF Mono', Monaco, monospace;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: var(--card);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+        .mode-switcher {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .mode-btn {
+            flex: 1;
+            padding: 8px 12px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .mode-btn:hover {
+            border-color: var(--primary);
+            color: var(--text);
+        }
+        .mode-btn.active {
+            background: rgba(6, 182, 212, 0.12);
+            border-color: rgba(6, 182, 212, 0.4);
+            color: var(--primary);
+        }
+        .sidebar-section {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+        }
+        .section-header {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            padding: 0 4px;
+        }
+        /* Week cards */
+        .week-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .week-card {
+            padding: 10px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .week-card:hover {
+            border-color: var(--primary);
+            background: rgba(6, 182, 212, 0.05);
+        }
+        .week-card.active {
+            border-color: var(--primary);
+            background: rgba(6, 182, 212, 0.1);
+        }
+        .w-id {
+            font-family: var(--mono);
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 2px;
+        }
+        .w-dates {
+            font-size: 10px;
+            color: var(--muted);
+            margin-bottom: 6px;
+        }
+        .w-stats {
+            display: flex;
+            gap: 8px;
+        }
+        .week-stat {
+            font-size: 9px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.05);
+        }
+        .wstat-em { color: var(--primary); }
+        .wstat-xr { color: var(--secondary); }
+        .wstat-tot { color: var(--accent); }
+        /* Report list */
+        .report-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .report-item {
+            padding: 10px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .report-item:hover {
+            border-color: var(--secondary);
+            background: rgba(139, 92, 246, 0.05);
+        }
+        .report-item.active {
+            border-color: var(--secondary);
+            background: rgba(139, 92, 246, 0.1);
+        }
+        .rname {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--text);
+            margin-bottom: 2px;
+        }
+        .rtitle {
+            font-size: 10px;
+            color: var(--muted);
+            line-height: 1.3;
+        }
+        .rdate {
+            font-size: 9px;
+            color: var(--muted);
+            margin-top: 4px;
+        }
+        .report-empty {
+            padding: 20px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 11px;
+        }
+        /* Week reports container */
+        .week-reports {
+            padding: 8px 10px;
+            border-top: 1px solid var(--border);
+            overflow-y: auto;
+            max-height: 300px;
+        }
+        /* Eval sidebar */
+        .eval-sidebar {
+            display: none;
+            flex-direction: column !important;
+            flex: 1;
+            overflow: hidden;
+            padding: 12px;
+        }
+        .eval-search {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 12px;
+        }
+        .eval-search:focus {
+            outline: none;
+            border-color: var(--secondary);
+        }
+        .eval-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .eval-entry-item {
+            padding: 10px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .eval-entry-item:hover {
+            border-color: var(--secondary);
+            background: rgba(139, 92, 246, 0.05);
+        }
+        .eval-entry-item.active {
+            border-color: var(--secondary);
+            background: rgba(139, 92, 246, 0.1);
+        }
+        /* Eval reports under selected entry */
+        .eval-reports-under {
+            padding: 8px 10px;
+            border-top: 1px solid var(--border);
+            background: var(--card);
+            margin-top: 4px;
+            overflow-y: auto;
+            max-height: 300px;
+        }
+        /* Eval reports container */
+        .eval-reports-container {
+            padding: 8px 10px;
+            border-top: 1px solid var(--border);
+            background: var(--card);
+            margin-top: 4px;
+        }
+        /* Homolog badge for BLAST results */
+        .homolog-badge {
+            display: inline-block;
+            background: rgba(139, 92, 246, 0.15);
+            color: var(--secondary);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            cursor: help;
+            margin-left: 4px;
+            white-space: nowrap;
+        }
+        .homolog-badge:hover {
+            background: rgba(139, 92, 246, 0.25);
+            border-color: rgba(139, 92, 246, 0.5);
+        }
+        tr.blast-row {
+            background: rgba(139, 92, 246, 0.03);
+        }
+        tr.blast-row:hover td {
+            background: rgba(139, 92, 246, 0.08);
+        }
+        .blast-homolog-link {
+            font-family: var(--mono);
+            font-weight: 700;
+            color: var(--secondary);
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .blast-homolog-link:hover {
+            text-decoration: underline;
+        }
+        .blast-identity {
+            font-weight: 700;
+            color: var(--success);
+        }
+        .blast-identity.low {
+            color: var(--accent);
+        }
+        .blast-identity.mid {
+            color: #f59e0b;
+        }
+        .blast-identity.high {
+            color: var(--success);
+        }
+        .blast-evalue {
+            font-family: var(--mono);
+            color: var(--muted);
+            font-size: 10px;
+        }
+        .blast-coverage {
+            color: var(--muted);
+        }
+        .blast-desc {
+            color: var(--text);
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .blast-method {
+            font-size: 10px;
+            color: var(--muted);
+            white-space: nowrap;
+        }
+        .blast-res {
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--success);
+            white-space: nowrap;
+        }
+        .blast-if {
+            white-space: nowrap;
+        }
+        .blast-table-container {
+            max-height: 220px;
+            overflow-y: auto;
+        }
+
+        /* Main content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            padding-left: 24px;
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+        }
+        .toolbar select, .toolbar input {
+            padding: 6px 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 12px;
+        }
+        .toolbar select:focus, .toolbar input:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        .toolbar button {
+            padding: 6px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .toolbar button:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .entry-count {
+            font-size: 11px;
+            color: var(--muted);
+            margin-left: auto;
+        }
+        /* Table */
+        .table-container {
+            flex: 1;
+            overflow: auto;
+            padding: 16px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        th {
+            text-align: left;
+            padding: 10px 12px;
+            background: var(--card);
+            border-bottom: 1px solid var(--border);
+            font-weight: 600;
+            color: var(--muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            user-select: none;
+        }
+        th:hover {
+            color: var(--text);
+        }
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        tr:hover td {
+            background: rgba(255,255,255,0.02);
+        }
+        .pdb-link {
+            font-family: var(--mono);
+            font-weight: 700;
+            color: var(--primary);
+            cursor: pointer;
+        }
+        .pdb-link:hover {
+            text-decoration: underline;
+        }
+        .method-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .badge-em { background: rgba(6, 182, 212, 0.15); color: var(--primary); }
+        .badge-xr { background: rgba(139, 92, 246, 0.15); color: var(--secondary); }
+        .badge-nmr { background: rgba(245, 158, 11, 0.15); color: var(--accent); }
+        .badge-oth { background: rgba(148, 163, 184, 0.15); color: var(--muted); }
+        .res { font-family: var(--mono); font-size: 11px; }
+        .res-good { color: var(--success); }
+        .res-mid { color: var(--accent); }
+        .res-poor { color: var(--danger); }
+        .if-badge {
+            display: inline-block;
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 9px;
+            font-weight: 600;
+        }
+        .tier-top { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+        .tier-high { background: rgba(245, 158, 11, 0.15); color: var(--accent); }
+        .tier-mid { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .tier-low { background: rgba(148, 163, 184, 0.15); color: var(--muted); }
+        .if-val { font-size: 10px; color: var(--muted); margin-left: 4px; }
+        .title-cell {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .lig-cell { font-size: 11px; }
+        .lig-chip {
+            display: inline-block;
+            padding: 2px 6px;
+            margin: 2px;
+            background: rgba(6, 182, 212, 0.1);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+            border-radius: 4px;
+            font-size: 9px;
+            color: var(--primary);
+            cursor: pointer;
+        }
+        .lig-chip:hover {
+            background: rgba(6, 182, 212, 0.2);
+        }
+        /* Preview panel */
+        .preview-panel {
+            width: 380px;
+            background: var(--card);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .preview-panel.hidden {
+            display: none;
+        }
+        .preview-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .preview-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .preview-close {
+            padding: 4px 8px;
+            background: none;
+            border: none;
+            color: var(--muted);
+            font-size: 16px;
+            cursor: pointer;
+        }
+        .preview-close:hover {
+            color: var(--text);
+        }
+        .preview-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+        }
+        .preview-tab {
+            flex: 1;
+            padding: 10px;
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--muted);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .preview-tab:hover {
+            color: var(--text);
+        }
+        .preview-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+        .preview-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+        .report-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .mr {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .ml {
+            font-size: 11px;
+            color: var(--muted);
+        }
+        .mv {
+            font-size: 12px;
+            color: var(--text);
+            font-weight: 500;
+        }
+        .preview-empty {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: calc(100vh - 200px);
+            color: var(--muted);
+            padding: 40px;
+        }
+        .preview-empty-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
+        }
+        /* Markdown content */
+        .md-content {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .md-content h1, .md-content h2, .md-content h3 {
+            margin: 16px 0 8px;
+            color: var(--text);
+        }
+        .md-content h1 { font-size: 16px; }
+        .md-content h2 { font-size: 14px; }
+        .md-content h3 { font-size: 13px; }
+        .md-content p { margin: 8px 0; color: var(--muted); }
+        .md-content ul { margin: 8px 0; padding-left: 20px; }
+        .md-content li { margin: 4px 0; color: var(--muted); }
+        .md-content code {
+            background: rgba(255,255,255,0.05);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: var(--mono);
+            font-size: 11px;
+        }
+        .md-content pre {
+            background: rgba(255,255,255,0.05);
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .md-content pre code {
+            background: none;
+            padding: 0;
+        }
+        .md-content blockquote {
+            border-left: 2px solid var(--primary);
+            padding-left: 12px;
+            margin: 8px 0;
+            color: var(--muted);
+        }
+        /* Tooltip */
+        .tooltip {
+            position: fixed;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            max-width: 280px;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .tooltip.show { display: block; }
+        .tooltip-header {
+            font-family: var(--mono);
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+        .tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            margin: 4px 0;
+        }
+        .tooltip-label { color: var(--muted); }
+        .tooltip-value { color: var(--text); }
+        .blast-value-high { color: var(--success); font-weight: 700; }
+        .blast-value-mid { color: #f59e0b; font-weight: 700; }
+        .blast-value-low { color: var(--danger); font-weight: 700; }
+        .blast-value-neutral { color: var(--text); }
+        .tooltip-img {
+            width: 100%;
+            height: 160px;
+            object-fit: contain;
+            margin-top: 8px;
+            border-radius: 4px;
+            background: var(--bg);
+        }
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+        .modal-overlay.show {
+            display: flex;
+        }
+        .modal-content {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 960px;
+            max-height: 90vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        .modal-close {
+            padding: 4px 8px;
+            background: none;
+            border: none;
+            color: var(--muted);
+            font-size: 20px;
+            cursor: pointer;
+        }
+        .modal-close:hover {
+            color: var(--text);
+        }
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        /* Sort arrow */
+        .sort-arrow {
+            display: inline-block;
+            margin-left: 4px;
+            font-size: 10px;
+            color: var(--muted);
+        }
+        th[data-sorted="true"] .sort-arrow {
+            color: var(--primary);
+        }
+        /* Markdown table styles for report modals */
+        .md-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 12px;
+            margin: 12px 0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .md-table tr {
+            border-bottom: 1px solid var(--border);
+        }
+        .md-table tr:last-child {
+            border-bottom: none;
+        }
+        .md-table tr:nth-child(even) {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .md-table tr:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .md-table td {
+            padding: 10px 12px;
+            color: var(--text);
+            vertical-align: top;
+        }
+        .md-table tr:first-child td {
+            background: var(--bg);
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 1px solid var(--border);
+        }
+        /* Markdown content styles */
+        .md-content h1 {
+            font-size: 18px;
+            color: var(--primary);
+            margin: 0 0 16px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .md-content h2 {
+            font-size: 15px;
+            color: var(--text);
+            margin: 20px 0 12px;
+            padding-left: 10px;
+            border-left: 3px solid var(--primary);
+        }
+        .md-content h3 {
+            font-size: 13px;
+            color: var(--accent);
+            margin: 16px 0 10px;
+        }
+        .md-content p {
+            margin: 10px 0;
+            line-height: 1.6;
+        }
+        .md-content ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .md-content li {
+            margin: 6px 0;
+            line-height: 1.5;
+        }
+        .md-content code {
+            background: var(--bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--accent);
+        }
+        .md-content pre {
+            background: var(--bg);
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 12px 0;
+        }
+        .md-content pre code {
+            background: none;
+            padding: 0;
+        }
+        .md-content blockquote {
+            border-left: 3px solid var(--secondary);
+            margin: 12px 0;
+            padding: 8px 16px;
+            background: rgba(139, 92, 246, 0.05);
+            border-radius: 0 8px 8px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">PDB Structure Tracker</div>
+                <div class="mode-switcher">
+                    <button class="mode-btn active" id="btn-mode-weekly">Weekly</button>
+                    <button class="mode-btn" id="btn-mode-eval">Evaluation</button>
+                </div>
+            </div>
+            <!-- Weekly sidebar -->
+            <div id="sidebar-weeks-header" class="sidebar-section">
+                <div class="section-header">Weeks</div>
+                <div id="week-list" class="week-list"></div>
+            </div>
+            <!-- Back button for collapsing -->
+            <div id="back-button-container" style="display:none;padding:8px 12px;border-bottom:1px solid var(--border);">
+                <button id="btn-back" style="width:100%;padding:8px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;cursor:pointer;">&#8592; Back to all weeks</button>
+            </div>
+            <!-- Eval sidebar -->
+            <div id="eval-sidebar" class="sidebar-section eval-sidebar" style="display:none;">
+                <div class="section-header">Evaluations</div>
+                <!-- Eval toolbar matching weekly style -->
+                <div id="eval-toolbar" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">
+                    <div style="display:flex;gap:8px;">
+                        <input type="text" id="eval-search" placeholder="Search UniProt..." style="flex:1;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;">
+                        <button id="btn-eval-search" style="padding:6px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;cursor:pointer;">Search</button>
+                    </div>
+                    <button id="btn-eval-reset" style="padding:6px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;cursor:pointer;">Reset</button>
+                </div>
+                <div id="eval-list" class="eval-list"></div>
+                <!-- Back button for eval - moved below the list -->
+                <div id="eval-back-container" style="display:none;margin-top:10px;">
+                    <button id="btn-eval-back" style="width:100%;padding:8px;background:var(--card);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;cursor:pointer;">&#8592; Back to all entries</button>
+                </div>
+            </div>
+        </div>
+        <!-- Main content -->
+        <div class="main">
+            <!-- Weekly toolbar -->
+            <div class="toolbar" id="weekly-toolbar">
+                <select id="sel-week">
+                    <option value="all">All Weeks</option>
+                </select>
+                <select id="sel-method">
+                    <option value="all">All Methods</option>
+                    <option value="cryoem">Cryo-EM</option>
+                    <option value="electron_crystallography">Electron Crystallography</option>
+                    <option value="xray">X-ray</option>
+                    <option value="nmr">NMR</option>
+                </select>
+                <input type="text" id="inp-search" placeholder="Search...">
+                <button id="btn-search">Search</button>
+                <button id="btn-reset">Reset</button>
+                <div class="entry-count" id="entry-count">0 entries</div>
+            </div>
+            <!-- Eval toolbar (shown in eval mode) -->
+            <div class="toolbar" id="eval-toolbar-main" style="display:none;">
+                <select id="sel-eval-main-method">
+                    <option value="all">All Methods</option>
+                    <option value="cryoem">Cryo-EM</option>
+                    <option value="electron_crystallography">Electron Crystallography</option>
+                    <option value="xray">X-ray</option>
+                    <option value="nmr">NMR</option>
+                </select>
+                <input type="text" id="inp-eval-search" placeholder="Search PDB...">
+                <button id="btn-eval-main-search">Search</button>
+                <button id="btn-eval-main-reset">Reset</button>
+                <div class="entry-count" id="eval-entry-count">0 structures</div>
+            </div>
+            <div class="table-container" id="weekly-table">
+                <table>
+                    <thead id="table-head">
+                        <tr>
+                            <th data-col="pdb_id">PDB <span class="sort-arrow">&#8645;</span></th>
+                            <th data-col="method">Method <span class="sort-arrow">&#8645;</span></th>
+                            <th data-col="resolution">Res <span class="sort-arrow">&#8645;</span></th>
+                            <th data-col="journal_if">IF <span class="sort-arrow">&#8645;</span></th>
+                            <th data-col="title">Title <span class="sort-arrow">&#8645;</span></th>
+                            <th data-col="release_date">Date <span class="sort-arrow">&#8645;</span></th>
+                            <th data-col="ligands">Ligands <span class="sort-arrow">&#8645;</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </div>
+        <!-- Preview panel -->
+        <div id="preview-panel" class="preview-panel hidden">
+            <div class="preview-header">
+                <div class="preview-title" id="preview-title">Report</div>
+                <button class="preview-close" id="btn-close">&#10005;</button>
+            </div>
+            <div class="preview-tabs">
+                <button class="preview-tab active" data-tab="summary">Summary</button>
+                <button class="preview-tab" data-tab="report">Full Report</button>
+            </div>
+            <div class="preview-content" id="preview-content"></div>
+        </div>
+    </div>
+    <!-- Tooltips -->
+    <div id="tt-pdb" class="tooltip">
+        <div class="tooltip-header" id="tt-pdb-header"></div>
+        <div class="tooltip-row"><span class="tooltip-label">Method</span><span class="tooltip-value" id="tt-pdb-method"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Resolution</span><span class="tooltip-value" id="tt-pdb-res"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Date</span><span class="tooltip-value" id="tt-pdb-date"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Journal</span><span class="tooltip-value" id="tt-pdb-journal"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">IF</span><span class="tooltip-value" id="tt-pdb-if"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Ligands</span><span class="tooltip-value" id="tt-pdb-ligs"></span></div>
+        <div id="tt-pdb-title" style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.3;"></div>
+        <!-- Homolog Info Section -->
+        <div id="tt-pdb-homolog-section" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+            <div style="font-size:11px;color:var(--secondary);font-weight:600;margin-bottom:6px;">&#128279; BLAST Homolog</div>
+            <div class="tooltip-row"><span class="tooltip-label">Identity</span><span class="tooltip-value" id="tt-pdb-homolog-identity"></span></div>
+            <div class="tooltip-row"><span class="tooltip-label">E-value</span><span class="tooltip-value" id="tt-pdb-homolog-evalue"></span></div>
+            <div class="tooltip-row"><span class="tooltip-label">Coverage</span><span class="tooltip-value" id="tt-pdb-homolog-coverage"></span></div>
+        </div>
+        <img id="tt-pdb-img" class="tooltip-img" alt="">
+    </div>
+    <div id="tt-lig" class="tooltip">
+        <div class="tooltip-header" id="tt-lig-header"></div>
+        <div id="tt-lig-info" style="font-size:10px;color:var(--muted);margin-bottom:8px;"></div>
+        <img id="tt-lig-img" class="tooltip-img" alt="">
+    </div>
+    <!-- BLAST Homolog Tooltip -->
+    <div id="tt-homolog" class="tooltip">
+        <div class="tooltip-header" id="tt-homolog-header">BLAST Homolog</div>
+        <div class="tooltip-row"><span class="tooltip-label">PDB ID</span><span class="tooltip-value" id="tt-homolog-pdb"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Identity</span><span class="tooltip-value" id="tt-homolog-identity"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">E-value</span><span class="tooltip-value" id="tt-homolog-evalue"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Query Coverage</span><span class="tooltip-value" id="tt-homolog-coverage"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Method</span><span class="tooltip-value" id="tt-homolog-method"></span></div>
+        <div class="tooltip-row"><span class="tooltip-label">Resolution</span><span class="tooltip-value" id="tt-homolog-resolution"></span></div>
+        <div id="tt-homolog-desc" style="font-size:11px;color:var(--muted);margin-top:8px;line-height:1.3;max-height:60px;overflow:hidden;text-overflow:ellipsis;"></div>
+    </div>
+    <!-- Report Detail Modal -->
+    <div id="report-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title" id="modal-title">Report Detail</div>
+                <button class="modal-close" id="btn-modal-close">&times;</button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+    <script src="/pdb_app.js?v=3"></script>
+</body>
+</html>

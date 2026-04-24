@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Large data files
+pdb_weekly_raw/*.json
+journal_if_list.csv
+journal_if_list.json
+
+# Evaluation outputs (optional - remove if you want to keep them)
+# wiki/evaluations/*.json
+# wiki/evaluations/*.md

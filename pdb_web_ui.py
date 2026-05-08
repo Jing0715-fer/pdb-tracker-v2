@@ -3,15 +3,16 @@
 
 All paths are configurable via environment variables:
   PDB_DATA_DIR      - 数据根目录 (默认 ~/.pdb-tracker/)
-  PDB_DB_DIR        - 数据库目录 (默认 $PDB_DATA_DIR/data/)
+  PDB_DB_DIR        - 数据库目录 (默认 PDB_DATA_DIR/data/)
   PDB_DB_NAME       - 数据库文件名 (默认 pdb_tracker.db)
-  PDB_WEEKLY_DIR    - 周报目录 (默认 $PDB_DATA_DIR/weekly_reports/)
-  PDB_WEB_SCRIPT_DIR - Web UI 运行时目录 (默认 $PDB_DATA_DIR/web_scripts/)
+  PDB_WEEKLY_DIR    - 周报目录 (默认 PDB_DATA_DIR/weekly_reports/)
+  PDB_WEB_SCRIPT_DIR - Web UI 运行时目录 (默认 PDB_DATA_DIR/web_scripts/)
   PDB_WEB_PORT      - 端口 (默认 5555)
 """
 import os
 from pathlib import Path
 from flask import Flask, request, jsonify, Response, send_file
+from flask_cors import CORS
 import re, sqlite3, subprocess, time, json, logging, datetime
 
 # Setup logging first
@@ -47,6 +48,7 @@ SCRIPT_DIR = Path(os.getenv("PDB_WEB_SCRIPT_DIR", str(DATA_DIR / "web_scripts"))
 SCRIPT_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
+CORS(app)
 
 # ─── Generate JS file at startup ───────────────────────────────────────────
 def write_js():
@@ -61,13 +63,14 @@ def write_js():
     L("var allEntries=[];var snapshots=[];var allReports=[];var activeWeek=null;var activeEvalMdReport=null;")
     L("var activeMethod='all';var activeSearch='';var sortCol='release_date';var sortAsc=false;")
     L("var activeTab='summary';var activeReport=null;var molViewer=null;")
+    L("var activeCtxWeekId=null;var ctxMenu=null;var ctxMenuTitle=null;")
 
     L("function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;');}")
     L("function fmtMethod(m){if(!m)return '-';var mLower=m.toLowerCase();if(/electron crystallography/i.test(mLower))return 'ELECTRON CRYSTALLOGRAPHY';if(/electron microscopy|cryo/i.test(mLower))return 'Cryo-EM';if(/x-ray/i.test(mLower))return 'X-ray';if(/nmr/i.test(mLower))return 'NMR';return m;}")
 
-    L("async function init(){try{snapshots=await fetch('/api/snapshots').then(function(r){return r.json();});}catch(e){snapshots=[];}renderWeeks();try{allReports=await fetch('/api/reports/list').then(function(r){return r.json();});}catch(e){allReports=[];}await loadEntries();}")
+    L("async function init(){try{snapshots=await fetch('/api/snapshots').then(function(r){return r.json();});}catch(e){snapshots=[];}ctxMenu=document.getElementById('ctx-menu');ctxMenuTitle=document.getElementById('ctx-menu-title');renderWeeks();try{allReports=await fetch('/api/reports/list').then(function(r){return r.json();});}catch(e){allReports=[];}await loadEntries();}")
 
-    L("function renderWeeks(){var list=document.getElementById('week-list');if(!snapshots||!snapshots.length){list.innerHTML='<div class=\"report-empty\">No data</div>';return;}var sel=document.getElementById('sel-week');sel.innerHTML=\"<option value='all'>All Weeks</option>\";list.innerHTML='';snapshots.forEach(function(s){var card=document.createElement('div');card.className='report-item';card.dataset.wid=s.week_id;card.innerHTML=\"<div class='rname' style='font-size:11px;'><span style='font-family:var(--mono);color:var(--accent);'>\"+s.week_id+\"</span> <span style='font-size:9px;color:var(--muted);'>\"+s.total_structures+\" entries</span></div><div class='rtitle' style='font-size:10px;'>\"+s.week_start+\" -> \"+s.week_end+\"</div><div class='rdate' style='font-size:9px;color:var(--muted);'>EM:\"+(s.cryoem_count||0)+\" | XR:\"+(s.xray_count||0)+\"</div>\";card.onclick=(function(wid,c){return function(){onWeekClick(wid,c);};})(s.week_id,card);list.appendChild(card);var opt=document.createElement('option');opt.value=s.week_id;opt.textContent=s.week_id+' ('+s.week_start+')';sel.appendChild(opt);});}")
+    L("function renderWeeks(){var list=document.getElementById('week-list');if(!snapshots||!snapshots.length){list.innerHTML='<div class=\"report-empty\">No data</div>';return;}var sel=document.getElementById('sel-week');sel.innerHTML=\"<option value='all'>All Weeks</option>\";list.innerHTML='';snapshots.forEach(function(s){var card=document.createElement('div');card.className='report-item';card.dataset.wid=s.week_id;card.innerHTML=\"<div class='rname' style='font-size:11px;'><span style='font-family:var(--mono);color:var(--accent);'>\"+s.week_id+\"</span> <span style='font-size:9px;color:var(--muted);'>\"+s.total_structures+\" entries</span></div><div class='rtitle' style='font-size:10px;'>\"+s.week_start+\" -> \"+s.week_end+\"</div><div class='rdate' style='font-size:9px;color:var(--muted);'>EM:\"+(s.cryoem_count||0)+\" | XR:\"+(s.xray_count||0)+\"</div>\";card.onclick=(function(wid,c){return function(){onWeekClick(wid,c);};})(s.week_id,card);card.oncontextmenu=(function(wid){return function(e){e.preventDefault();activeCtxWeekId=wid;ctxMenuTitle.textContent=wid;ctxMenu.style.left=e.clientX+'px';ctxMenu.style.top=e.clientY+'px';ctxMenu.classList.add('show');};})(s.week_id);list.appendChild(card);var opt=document.createElement('option');opt.value=s.week_id;opt.textContent=s.week_id+' ('+s.week_start+')';sel.appendChild(opt);});}")
 
     L(r"async function onWeekClick(weekId,card){console.log('onWeekClick called with weekId=',weekId);activeWeek=weekId;activeMethod='all';activeSearch='';document.getElementById('sel-method').value='all';document.getElementById('inp-search').value='';var list=document.getElementById('week-list');var weekCards=list.querySelectorAll('.report-item');var selectedCard=null;if(weekId===null){weekCards.forEach(function(c){c.style.display='';c.classList.remove('active');});document.getElementById('sel-week').value='all';await loadEntries();var oldReportsDiv=document.getElementById('week-reports');if(oldReportsDiv)oldReportsDiv.remove();document.getElementById('back-button-container').style.display='none';}else{weekCards.forEach(function(c){if(c.dataset.wid===weekId){c.classList.add('active');c.style.display='';selectedCard=c;}else{c.classList.remove('active');c.style.display='none';}});if(selectedCard&&selectedCard!==list.firstChild){list.insertBefore(selectedCard,list.firstChild);}document.getElementById('sel-week').value=weekId;await loadEntries();var snap=null;for(var j=0;j<snapshots.length;j++)if(snapshots[j].week_id===weekId){snap=snapshots[j];break;}var filteredReports=[];if(snap){filteredReports=allReports.filter(function(r){var m=r.name.match(/(\d{4}-\d{2}-\d{2})/);return m&&m[1]>=snap.week_start&&m[1]<=snap.week_end;});}var oldReportsDiv=document.getElementById('week-reports');if(oldReportsDiv)oldReportsDiv.remove();var reportsDiv=document.createElement('div');reportsDiv.id='week-reports';reportsDiv.className='week-reports';reportsDiv.style.cssText='padding:8px 10px;border-top:1px solid var(--border);background:var(--card);margin-top:4px;';if(selectedCard){selectedCard.insertAdjacentElement('afterend',reportsDiv);}renderReportListInDiv(filteredReports,reportsDiv);document.getElementById('back-button-container').style.display='block';}}")
 
@@ -252,7 +255,7 @@ def write_js():
 
     L('function renderEvalReportsInDiv(container){if(!activeEvalId||!container)return;var entryReports=allEvalReports.filter(function(r){return r.uniprot_id===activeEvalId;});if(!entryReports.length){container.innerHTML="<div class=\'report-empty\' style=\'padding:10px;font-size:11px;\'>No evaluation reports</div>";return;}var html="<div style=\'font-size:11px;color:var(--primary);margin-bottom:8px;\'>Evaluation Reports</div><div style=\'display:flex;flex-direction:column;gap:6px;\'>";entryReports.forEach(function(r){var dateStr=r.created?r.created.substring(0,10):\'\';html+="<div class=\'report-item\' data-uid=\'"+r.uniprot_id+"\' onclick=\'onEvalMdReportClick(this)\' style=\'padding:8px 10px;font-size:11px;cursor:pointer;border-radius:6px;background:var(--bg);border:1px solid var(--border);transition:all 0.15s;\'><div style=\'font-family:var(--mono);color:var(--secondary);font-size:10px;font-weight:600;\'>"+escHtml(dateStr)+"</div><div style=\'font-size:10px;color:var(--primary);margin-top:3px;\'>"+escHtml(r.title||\'\')+"</div></div>";});html+="</div>";container.innerHTML=html;}')
 
-    L("function onEvalMdReportClick(el){var uid=el.getAttribute('data-uid');if(!uid)return;activeEvalMdReport=uid;var reportsDiv=document.getElementById('eval-reports-under');if(reportsDiv)renderEvalReportsInDiv(reportsDiv);var modal=document.getElementById('report-modal');var body=document.getElementById('modal-body');var title=document.getElementById('modal-title');title.textContent='Eval Report: '+uid;body.innerHTML=\"<div class=\\\"preview-empty\\\"><div class=\\\"preview-empty-icon\\\">&#8987;</div>Loading...</div>\";modal.classList.add('show');fetch('/api/evaluation/report?uniprot='+encodeURIComponent(uid)).then(function(res){return res.text();}).then(function(md){body.innerHTML=\"<div class=\\\"md-content\\\">\"+renderMD(md)+\"</div>\";}).catch(function(){body.innerHTML=\"<div class=\\\"preview-empty\\\"><div class=\\\"preview-empty-icon\\\">&#9888;</div>Failed to load</div>\";});}")
+    L("function onEvalMdReportClick(el){var uid=el.getAttribute('data-uid');if(!uid)return;activeEvalMdReport=uid;var reportsDiv=document.getElementById('eval-reports-under');if(reportsDiv)renderEvalReportsInDiv(reportsDiv);var modal=document.getElementById('report-modal');var body=document.getElementById('modal-body');var title=document.getElementById('modal-title');title.textContent='Eval Report: '+uid;body.innerHTML=\"<div class=\\\"preview-empty\\\"><div class=\\\"preview-empty-icon\\\">&#8987;</div>Loading...</div>\";modal.classList.add('show');fetch('/api/evaluation/report?uniprot='+encodeURIComponent(uid)).then(function(res){return res.text();}).then(function(md){body.innerHTML=\"<div class=\\\"md-content\\\">\"+renderEvalMD(md)+\"</div>\";}).catch(function(){body.innerHTML=\"<div class=\\\"preview-empty\\\"><div class=\\\"preview-empty-icon\\\">&#9888;</div>Failed to load</div>\";});}")
     L('window.onEvalMdReportClick=onEvalMdReportClick;')
 
 
@@ -267,32 +270,363 @@ def write_js():
     L("document.querySelectorAll('.preview-tab').forEach(function(t){t.onclick=(function(tab){return function(){switchTab(tab);};})(t.getAttribute('data-tab'));});")
 
     L("var currentMode='weekly';var activeEvalId=null;var activeEvalSearch='';var currentEvalStructures=[];var currentEvalData=null;var currentBlastResults=[];")
-    L("function setMode(mode){currentMode=mode;activeEvalId=null;currentEvalStructures=[];currentBlastResults=[];activeEvalMethod='all';activeEvalPdbSearch='';filteredEvalStructures=[];document.getElementById('btn-mode-weekly').classList.toggle('active',mode==='weekly');document.getElementById('btn-mode-eval').classList.toggle('active',mode==='eval');document.getElementById('btn-mode-weekly').style.background=mode==='weekly'?'rgba(6,182,212,0.12)':'var(--card)';document.getElementById('btn-mode-weekly').style.color=mode==='weekly'?'var(--primary)':'var(--muted)';document.getElementById('btn-mode-weekly').style.borderColor=mode==='weekly'?'rgba(6,182,212,0.4)':'var(--border)';document.getElementById('btn-mode-eval').style.background=mode==='eval'?'rgba(139,92,246,0.12)':'var(--card)';document.getElementById('btn-mode-eval').style.color=mode==='eval'?'var(--secondary)':'var(--muted)';document.getElementById('btn-mode-eval').style.borderColor=mode==='eval'?'rgba(139,92,246,0.4)':'var(--border)';document.getElementById('sidebar-weeks-header').style.display=mode==='weekly'?'block':'none';document.getElementById('week-list').style.display=mode==='weekly'?'flex':'none';document.getElementById('eval-sidebar').style.display=mode==='eval'?'flex':'none';document.getElementById('weekly-toolbar').style.display=mode==='eval'?'none':'flex';document.getElementById('eval-toolbar-main').style.display=mode==='eval'?'flex':'none';document.getElementById('weekly-table').style.display='block';var weekReportsDiv=document.getElementById('week-reports');if(weekReportsDiv)weekReportsDiv.style.display='none';var evalReportsDiv=document.getElementById('eval-reports-under');if(evalReportsDiv)evalReportsDiv.style.display='none';document.getElementById('eval-back-container').style.display='none';document.getElementById('back-button-container').style.display='none';var weekRep=document.getElementById('week-reports');if(weekRep)weekRep.remove();if(mode==='weekly'){activeWeek=null;document.getElementById('preview-panel').classList.add('hidden');document.getElementById('table-body').removeAttribute('data-eval-table');document.querySelectorAll('#week-list .report-item').forEach(function(c){c.style.display='';c.classList.remove('active');});document.getElementById('sel-week').value='all';renderTable(sortEntries(allEntries.slice()));}else{document.getElementById('sel-eval-main-method').value='all';document.getElementById('inp-eval-search').value='';document.getElementById('preview-panel').classList.add('hidden');closePreview();renderEvalTable([],[]);loadEvalList();}}")
+    L("function setMode(mode){currentMode=mode;activeEvalId=null;currentEvalStructures=[];currentBlastResults=[];activeEvalMethod='all';activeEvalPdbSearch='';filteredEvalStructures=[];document.getElementById('btn-mode-weekly').classList.toggle('active',mode==='weekly');document.getElementById('btn-mode-eval').classList.toggle('active',mode==='eval');document.getElementById('btn-mode-weekly').style.background=mode==='weekly'?'rgba(6,182,212,0.12)':'var(--card)';document.getElementById('btn-mode-weekly').style.color=mode==='weekly'?'var(--primary)':'var(--muted)';document.getElementById('btn-mode-weekly').style.borderColor=mode==='weekly'?'rgba(6,182,212,0.4)':'var(--border)';document.getElementById('btn-mode-eval').style.background=mode==='eval'?'rgba(139,92,246,0.12)':'var(--card)';document.getElementById('btn-mode-eval').style.color=mode==='eval'?'var(--secondary)':'var(--muted)';document.getElementById('btn-mode-eval').style.borderColor=mode==='eval'?'rgba(139,92,246,0.4)':'var(--border)';document.getElementById('sidebar-weeks-header').style.display=mode==='weekly'?'block':'none';document.getElementById('week-list').style.display=mode==='weekly'?'flex':'none';document.getElementById('eval-sidebar').style.display=mode==='eval'?'flex':'none';document.getElementById('weekly-toolbar').style.display=mode==='eval'?'none':'flex';document.getElementById('eval-toolbar-main').style.display=mode==='eval'?'flex':'none';document.getElementById('weekly-table').style.display='block';var weekReportsDiv=document.getElementById('week-reports');if(weekReportsDiv)weekReportsDiv.style.display='none';var evalReportsDiv=document.getElementById('eval-reports-under');if(evalReportsDiv)evalReportsDiv.style.display='none';document.getElementById('eval-back-container').style.display='none';document.getElementById('back-button-container').style.display='none';var weekRep=document.getElementById('week-reports');if(weekRep)weekRep.remove();if(mode==='weekly'){activeWeek=null;document.getElementById('preview-panel').classList.add('hidden');document.getElementById('table-body').removeAttribute('data-eval-table');document.querySelectorAll('#week-list .report-item').forEach(function(c){c.style.display='';c.classList.remove('active');});document.getElementById('sel-week').value='all';renderTable(sortEntries(allEntries.slice()));}else{activeBatchId=null;activeEvalId=null;document.getElementById('sel-eval-main-method').value='all';document.getElementById('inp-eval-search').value='';document.getElementById('preview-panel').classList.add('hidden');closePreview();renderEvalTable([],[]);loadEvalList();}}")
 
-    L("function renderEvalMD(md){var h=md.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');")
-    L("h=h.replace(/```([\\s\\S]*?)```/g,'<pre><code>$1</code></pre>');")
-    L("h=h.replace(/`([^`]+)`/g,'<code>$1</code>');")
-    L("h=h.replace(/^### (.+)$/gm,'<h3>$1</h3>');")
-    L("h=h.replace(/^## (.+)$/gm,'<h2>$1</h2>');")
-    L("h=h.replace(/^# (.+)$/gm,'<h1>$1</h1>');")
-    L("h=h.replace(/^> (.+)$/gm,'<blockquote>$1</blockquote>');")
-    L("h=h.replace(/^- (.+)$/gm,'<li>$1</li>');")
-    L("h=h.replace(/(<li>[\\s\\S]*?<\\/li>)+/g,'<ul>$&</ul>');")
-    L("h=h.replace(/^\\|.*\\|\\s*$/gm,function(row){var cells=row.split('|').slice(1,-1);var isSeparator=cells.every(function(c){return /^\\s*[-:]+\\s*$/.test(c);});if(isSeparator)return'';var htmlCells=cells.map(function(c){return'<td>'+c.trim()+'</td>';}).join('');return'<tr>'+htmlCells+'</tr>';});")
-    L("h=h.replace(/(<tr>[\\s\\S]*?<\\/tr>\\s*)+/g,'<table class=\\'md-table\\'>$&</table>');")
-    L("h=h.replace(/\\*\\*(.+?)\\*\\*/g,'<strong>$1</strong>');")
-    L("h=h.replace(/\\*(.+?)\\*\\*/g,'<em>$1</em>');")
-    L("h=h.replace(/\\n\\n+/g,'</p><p>');")
-    L("return '<p>'+h+'</p>'.replace(/<p>\\s*<\\/p>/g,'');}")
+    L("function renderEvalMD(md){var h=md.replace(/\\\\n/g,\'\\n\');return marked.parse(h);}")
+    L("var activeBatchId=null;var currentBatchData=null;var currentBatchSubTargets=[];")
+    L("async function loadEvalList(){console.log(\'loadEvalList called, search=\',activeEvalSearch);var q=encodeURIComponent(activeEvalSearch);var url=\'/api/evaluations\';if(q)url+=\'?q=\'+q;try{var evals=await fetch(url).then(function(r){return r.json();});renderEvalList(evals);}catch(e){renderEvalList([]);}}")
 
-    L("async function loadEvalList(){console.log('loadEvalList called, search=',activeEvalSearch);var q=encodeURIComponent(activeEvalSearch);var url='/api/evaluations';if(q)url+='?q='+q;try{var evals=await fetch(url).then(function(r){return r.json();});renderEvalList(evals);}catch(e){renderEvalList([]);}}")
-
-    L("function renderEvalList(evals){var list=document.getElementById('eval-list');if(!evals||!evals.length){list.innerHTML=\"<div class='report-empty' style='font-size:11px;'>\"+(activeEvalSearch?'无匹配结果':'暂无评估记录')+\"</div>\";return;}list.innerHTML='';evals.forEach(function(e){var item=document.createElement('div');item.className='report-item'+(activeEvalId===e.uniprot_id?' active':'');item.dataset.uid=e.uniprot_id;var scores=e.scores||{};var bestScore=0;for(var m in scores)if(scores[m].score>bestScore)bestScore=scores[m].score;var scoreColor=bestScore>=7?'var(--success)':bestScore>=5?'var(--accent)':'var(--danger)';item.innerHTML=\"<div class='rname' style='font-size:11px;'><span style='font-family:var(--mono);color:var(--accent);'>\"+e.uniprot_id+\"</span> <span style='font-size:9px;color:\"+scoreColor+\";'>\"+bestScore+\"</span></div><div class='rtitle' style='font-size:10px;'>\"+escHtml(e.protein_name||'')+\"</div><div class='rdate' style='font-size:9px;color:var(--muted);'>\"+e.gene_name+\"</div>\";item.onclick=(function(uid){return function(){onEvalClick(uid);};})(e.uniprot_id);list.appendChild(item);});}")
 
     L("document.getElementById('btn-modal-close').onclick=function(){document.getElementById('report-modal').classList.remove('show');};")
     L("document.getElementById('report-modal').onclick=function(e){if(e.target===this)document.getElementById('report-modal').classList.remove('show');};")
 
-    L("async function onEvalClick(uniprotId){activeEvalId=uniprotId;activeEvalMethod='all';activeEvalPdbSearch='';document.getElementById('sel-eval-main-method').value='all';document.getElementById('inp-eval-search').value='';var oldReportsDiv=document.getElementById('eval-reports-under');if(oldReportsDiv){oldReportsDiv.remove();}var list=document.getElementById('eval-list');var items=list.querySelectorAll('.report-item');var selectedItem=null;items.forEach(function(i){if(i.dataset.uid===uniprotId){i.classList.add('active');i.style.display='';selectedItem=i;}else{i.classList.remove('active');i.style.display='none';}});if(selectedItem&&selectedItem!==list.firstChild){list.insertBefore(selectedItem,list.firstChild);}document.getElementById('eval-back-container').style.display='block';try{var data=await fetch('/api/evaluations/'+encodeURIComponent(uniprotId)).then(function(r){return r.json();});if(data.error){currentEvalData=null;currentEvalStructures=[];filteredEvalStructures=[];currentBlastResults=[];renderEvalTable([],[]);return;}currentEvalData=data;var rawStructures=data.pdb_structures||[];currentEvalStructures=rawStructures.map(function(s,i){s._origIdx=i;return s;});currentBlastResults=data.blast_results||[];filteredEvalStructures=currentEvalStructures.slice();renderEvalTable(filteredEvalStructures,currentBlastResults);activeEvalMdReport=null;await loadEvalReports();var reportsDiv=document.createElement('div');reportsDiv.id='eval-reports-under';reportsDiv.className='eval-reports-under';reportsDiv.style.cssText='padding:8px 10px;border-top:1px solid var(--border);background:var(--card);margin-top:4px;';if(selectedItem){selectedItem.insertAdjacentElement('afterend',reportsDiv);}renderEvalReportsInDiv(reportsDiv);reportsDiv.style.display='block';}catch(e){currentEvalData=null;currentEvalStructures=[];filteredEvalStructures=[];currentBlastResults=[];renderEvalTable([],[]);}}")
+    L("// ─── BATCH EVALUATION SUPPORT (added by patch) ───────────────────────────────")
+
+    L("// New state variables")
+    L("var activeBatchId = null;")
+    L("var currentBatchData = null;")
+    L("var currentBatchSubTargets = [];")
+    L("var activeBatchSubTarget = null;")
+
+    L("function renderBatchSubTargets(batchId, subTargets) {")
+    L("    var list = document.getElementById(\'eval-list\');")
+    L("    var oldSubs = list.querySelectorAll(\'.sub-target-item\');")
+    L("    oldSubs.forEach(function(s) { s.remove(); });")
+    L("    var batchItem = list.querySelector(\'.batch-item.active\');")
+    L("    console.log(\'DEBUG renderBatchSubTargets ENTRY: batchId=\' + batchId + \', subTargets.length=\' + (subTargets?subTargets.length:\'null\') + \', batchItem found=\' + (batchItem?\'yes:\'+batchItem.className:\'no\'));")
+    L("    if (!subTargets || !subTargets.length) { console.log(\'DEBUG renderBatchSubTargets: early return due to empty subTargets\'); return; }")
+    L("    var frag = document.createDocumentFragment();")
+    L("    console.log(\'DEBUG renderBatchSubTargets: starting forEach, subTargets.length=\' + subTargets.length);")
+    L("    subTargets.forEach(function(st, idx) {")
+    L("        console.log(\'DEBUG renderBatchSubTargets: processing item \' + idx + \', uniprot_id=\' + st.uniprot_id);")
+    L("        var subItem = document.createElement(\'div\');")
+    L("        subItem.className = \'report-item sub-target-item\' + (activeEvalId === st.uniprot_id ? \' active\' : \'\');")
+    L("        subItem.dataset.uid = st.uniprot_id;")
+    L("        var scores = st.scores || {};")
+    L("        var bestScore = 0;")
+    L("        for (var m in scores) if (scores[m].score > bestScore) bestScore = scores[m].score;")
+    L("        var scoreColor = bestScore >= 7 ? \'var(--success)\' : bestScore >= 5 ? \'var(--accent)\' : \'var(--danger)\';")
+    L("        subItem.innerHTML = \"<div style=\'padding-left:16px;border-left:2px solid var(--secondary);margin-bottom:2px;\'>\" +")
+    L("            \"<div class=\'rname\' style=\'font-size:10px;\'>\" +")
+    L("            \"<span style=\'font-family:var(--mono);color:var(--primary);\'>\" + st.uniprot_id + \"</span> \" +")
+    L("            \"<span style=\'font-size:9px;color:\" + scoreColor + \";\'>\" + bestScore + \"</span></div>\" +")
+    L("            \"<div class=\'rtitle\' style=\'font-size:9px;\'>\" + escHtml(st.protein_name || \'\') + \"</div>\" +")
+    L("            \"<div class=\'rdate\' style=\'font-size:8px;color:var(--muted);\'>PDB:\" + st.pdb_count + \" | Cov:\" + st.coverage + \"%</div>\" +")
+    L("            \"</div>\";")
+    L("        subItem.onclick = (function(uid) { return function() { onEvalClick(uid); }; })(st.uniprot_id);")
+    L("        frag.appendChild(subItem);")
+    L("    });")
+    L("    console.log(\'DEBUG renderBatchSubTargets: after forEach, frag.childElementCount=\' + frag.childElementCount);")
+    L("    console.log(\'DEBUG renderBatchSubTargets: before insert, list.children count=\' + list.children.length);")
+    L("    try {")
+    L("        if (batchItem) {")
+    L("            console.log(\'DEBUG renderBatchSubTargets: batchItem is:\', batchItem, \'parent:\', batchItem.parentNode);")
+    L("            console.log(\'DEBUG renderBatchSubTargets: inserting after batchItem using insertAdjacentElement\');")
+    L("            batchItem.insertAdjacentElement(\'afterend\', frag);")
+    L("            console.log(\'DEBUG renderBatchSubTargets: insertAdjacentElement succeeded\');")
+    L("        } else {")
+    L("            console.log(\'DEBUG renderBatchSubTargets: no batchItem, appending to list\');")
+    L("            list.appendChild(frag);")
+    L("        }")
+    L("    } catch(e) {")
+    L("        console.error(\'DEBUG renderBatchSubTargets: ERROR during insert:\', e.message);")
+    L("        console.log(\'DEBUG renderBatchSubTargets: trying alternative insert method\');")
+    L("        try {")
+    L("            var nextSibling = batchItem ? batchItem.nextSibling : null;")
+    L("            if (batchItem && batchItem.parentNode === list) {")
+    L("                list.insertBefore(frag, nextSibling);")
+    L("                console.log(\'DEBUG renderBatchSubTargets: insertBefore succeeded\');")
+    L("            } else {")
+    L("                list.appendChild(frag);")
+    L("                console.log(\'DEBUG renderBatchSubTargets: appended to list as fallback\');")
+    L("            }")
+    L("        } catch(e2) {")
+    L("            console.error(\'DEBUG renderBatchSubTargets: insertBefore also failed:\', e2.message);")
+    L("        }")
+    L("    }")
+    L("    console.log(\'DEBUG renderBatchSubTargets: after insert, list.children count=\' + list.children.length + \', checking sub-target items...\');")
+    L("    var insertedSubs = list.querySelectorAll(\'.sub-target-item\');")
+    L("    console.log(\'DEBUG renderBatchSubTargets: found \' + insertedSubs.length + \' .sub-target-item elements in list\');")
+    L("    insertedSubs.forEach(function(el, idx) { console.log(\'DEBUG: sub-target-item[\' + idx + \'] display=\' + window.getComputedStyle(el).display + \', visibility=\' + window.getComputedStyle(el).visibility); });")
+    L("}")
+
+    L("function renderBatchPreview(batchData) { console.log('DEBUG renderBatchPreview called: subTargets=' + currentBatchSubTargets.length);")
+    L("    document.getElementById(\'preview-panel\').classList.remove(\'hidden\');")
+    L("    document.getElementById(\'preview-title\').textContent = \'Batch: \' + batchData.batch_id;")
+    L("    var c = document.getElementById(\'preview-content\');")
+    L("    var subCount = currentBatchSubTargets.length;")
+    L("    var subHtml = \"<div style=\'padding:8px 0 4px;font-size:11px;color:var(--muted);\'>\" + subCount + \" 个子靶点</div>\" +")
+    L("        \"<div style=\'display:flex;flex-direction:column;gap:4px;margin-bottom:10px;\' id=\'batch-sub-list\'></div>\";")
+    L("    currentBatchSubTargets.forEach(function(st) {")
+    L("        var scores = st.scores || {};")
+    L("        var best = 0;")
+    L("        for (var m in scores) if (scores[m].score > best) best = scores[m].score;")
+    L("        var sColor = best >= 7 ? \'var(--success)\' : best >= 5 ? \'var(--accent)\' : \'var(--danger)\';")
+    L("        var div = document.createElement(\'div\');")
+    L("        div.style.cssText = \'padding:6px 8px;background:var(--bg);border-radius:4px;font-size:10px;cursor:pointer;border:1px solid var(--border);\';")
+    L("        div.innerHTML = \"<span style=\'font-family:var(--mono);color:var(--primary);\'>\" + st.uniprot_id + \"</span> \" +")
+    L("            \"<span style=\'color:\" + sColor + \";\'>\" + best.toFixed(1) + \"/10</span> \" +")
+    L("            \"<span style=\'color:var(--muted);\'>\" + escHtml(st.protein_name || \'\') + \"</span>\";")
+    L("        div.onclick = (function(uid) { return function() { onBatchSubTargetClick(uid); }; })(st.uniprot_id);")
+    L("        document.getElementById(\'batch-sub-list\').appendChild(div);")
+    L("    });")
+    L("    var combinedReport = batchData.combined_report || \'\';")
+    L("    if (combinedReport) {")
+    L("        c.innerHTML = subHtml + \"<div class=\'md-content\'>\" + renderEvalMD(combinedReport) + \"</div>\";")
+    L("    } else {")
+    L("        c.innerHTML = subHtml + \"<div class=\'preview-empty\'><div class=\'preview-empty-icon\'>&#128196;</div><div style=\'font-size:11px;color:var(--muted);margin-top:6px;\'>暂无综合评估报告</div></div>\";")
+    L("    }")
+    L("}")
+
+    L("async function onBatchClick(batchId) { console.log('DEBUG onBatchClick START');")
+    L("    switchTab('summary');")
+    L("    activeBatchId = batchId;")
+    L("    activeEvalId = null;")
+    L("    currentBatchSubTargets = [];")
+    L("    document.getElementById(\'eval-back-container\').style.display = \'block\';")
+    L("    document.getElementById(\'btn-eval-back\').textContent = \'返回批次列表\';")
+    L("    var list = document.getElementById(\'eval-list\');")
+    L("    var items = list.querySelectorAll(\'.report-item\');")
+    L("    var selectedBatch = null;")
+    L("    items.forEach(function(i) {")
+    L("        if (i.dataset.batch === batchId) {")
+    L("            i.classList.add(\'active\');")
+    L("            i.style.display = \'\';")
+    L("            selectedBatch = i;")
+    L("        } else {")
+    L("            i.classList.remove(\'active\');")
+    L("            i.style.display = \'none\';")
+    L("        }")
+    L("    });")
+    L("    if (selectedBatch && selectedBatch !== list.firstChild) {")
+    L("        list.insertBefore(selectedBatch, list.firstChild);")
+    L("    }")
+    L("    var oldEvalReports = document.getElementById('eval-reports-under'); if(oldEvalReports) oldEvalReports.remove();")
+    L("    try {")
+    L("        var batchData = await fetch(\'/api/batches/\' + encodeURIComponent(batchId)).then(function(r) { return r.json(); }); console.log(\'DEBUG after fetch: sub_targets=\' + (batchData.sub_targets?batchData.sub_targets.length:\'null\') + \', error=\' + batchData.error);")
+    L("        if (batchData.error) {")
+    L("            currentBatchData = null;")
+    L("            renderEvalTable([], []);")
+    L("            return;")
+    L("        }")
+    L("        currentBatchData = batchData;")
+    L("        console.log('DEBUG onBatchClick: subTargets=' + currentBatchSubTargets.length + ', first st has ' + (currentBatchSubTargets[0] ? currentBatchSubTargets[0].blast_results.length : 0) + ' blast results');")
+    L("        console.log('DEBUG ASSIGN: batchData.sub_targets=' + (batchData.sub_targets?batchData.sub_targets.length:'null') + ', setting currentBatchSubTargets'); currentBatchSubTargets = batchData.sub_targets || []; console.log('DEBUG ASSIGN DONE: currentBatchSubTargets.length=' + currentBatchSubTargets.length);")
+    L("        renderBatchSubTargets(batchId, currentBatchSubTargets);")
+    L("        console.log('DEBUG before renderBatchPreview: subTargets=' + (currentBatchSubTargets?currentBatchSubTargets.length:'null')); renderBatchPreview(batchData); console.log('DEBUG after renderBatchPreview');")
+    L("        var allStructures = [];")
+    L("        var allBlast = [];")
+    L("        for (var i = 0; i < currentBatchSubTargets.length; i++) {")
+    L("            var st = currentBatchSubTargets[i];")
+    L("            if (st.pdb_structures) { for (var j = 0; j < st.pdb_structures.length; j++) { st.pdb_structures[j]._subTarget = st.uniprot_id; allStructures.push(st.pdb_structures[j]); } }")
+    L("            if (st.blast_results) { for (var j = 0; j < st.blast_results.length; j++) { st.blast_results[j]._subTarget = st.uniprot_id; allBlast.push(st.blast_results[j]); } }")
+    L("        }")
+    L("        currentEvalStructures = allStructures.map(function(s, i) { s._origIdx = i; return s; });")
+    L("        currentBlastResults = allBlast;")
+    L("        filteredEvalStructures = currentEvalStructures.slice();")
+    L("        renderEvalTable(filteredEvalStructures, currentBlastResults);")
+    L("    } catch(e) {")
+    L("        currentBatchData = null;")
+    L("        currentBatchSubTargets = [];")
+    L("        renderEvalTable([], []);")
+    L("    }")
+    L("}")
+
+    L("// Updated renderEvalList: handles both batch and individual entries")
+    L("function renderEvalList(evals) {")
+    L("    var list = document.getElementById(\'eval-list\');")
+    L("    if (!evals || !evals.length) {")
+    L("        list.innerHTML = \"<div class=\'report-empty\' style=\'font-size:11px;\'>\" + (activeEvalSearch ? \'无匹配结果\' : \'暂无评估记录\') + \"</div>\";")
+    L("        return;")
+    L("    }")
+    L("    list.innerHTML = \'\';")
+    L("    evals.forEach(function(e) {")
+    L("        if (e.is_batch) {")
+    L("            // Batch entry")
+    L("            var item = document.createElement(\'div\');")
+    L("            item.className = \'report-item batch-item\' + (activeBatchId === e.batch_id ? \' active\' : \'\');")
+    L("            item.dataset.batch = e.batch_id;")
+    L("            var subCount = e.sub_target_count || 0;")
+    L("            var scoreStr = e.best_score > 0 ? \" <span style=\'font-size:9px;color:\" + e.score_color + \";\'>\" + e.best_score.toFixed(1) + \"</span>\" : \'\';")
+    L("            item.innerHTML = \"<div class=\'rname\' style=\'font-size:11px;\'>\" +")
+    L("                \"<span style=\'font-family:var(--mono);color:var(--secondary);font-weight:700;\'>Batch</span> \" +")
+    L("                \"<span style=\'font-size:9px;color:var(--accent);\'>\" + escHtml(e.batch_id || \'\') + \"</span>\" + scoreStr +")
+    L("                \"</div>\" +")
+    L("                \"<div class=\'rtitle\' style=\'font-size:10px;\'>\" + escHtml(e.title || \'\') + \"</div>\" +")
+    L("                \"<div class=\'rdate\' style=\'font-size:9px;color:var(--muted);\'>\" + subCount + \"个子靶点</div>\";")
+    L("            var delBtn = document.createElement('button');")
+    L("            delBtn.textContent = 'x';")
+    L("            delBtn.style.cssText = 'position:absolute;right:4px;top:4px;width:16px;height:16px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);border-radius:3px;color:var(--danger);font-size:9px;cursor:pointer;line-height:1;padding:0;opacity:0.7;';")
+    L("            delBtn.onclick = (function(bid) { return function(ev) { ev.stopPropagation(); if(confirm('Delete batch ' + bid + '?')) deleteBatch(bid); }; })(e.batch_id);")
+    L("            item.style.cssText = 'position:relative;padding-right:28px;';")
+    L("            item.appendChild(delBtn);")
+    L("            item.onclick = (function(bid) { return function() { onBatchClick(bid); }; })(e.batch_id);")
+    L("            list.appendChild(item);")
+    L("        } else {")
+    L("            // Individual entry")
+    L("            var item = document.createElement('div');")
+    L("            item.className = 'report-item' + (activeEvalId === e.uniprot_id ? ' active' : '');")
+    L("            item.dataset.uid = e.uniprot_id;")
+    L("            var scores = e.scores || {};")
+    L("            var bestScore = 0;")
+    L("            for (var m in scores) if (scores[m].score > bestScore) bestScore = scores[m].score;")
+    L("            var scoreColor = bestScore >= 7 ? 'var(--success)' : bestScore >= 5 ? 'var(--accent)' : 'var(--danger)';")
+    L("            item.innerHTML = \"<div class='rname' style='font-size:11px;'>\" +")
+
+    L("                \"<span style='font-family:var(--mono);color:var(--accent);'>\" + e.uniprot_id + \"</span> \" +")
+
+    L("                \"<span style='font-size:9px;color:\" + scoreColor + \";'>\" + bestScore + \"</span></div>\" +")
+
+    L("                \"<div class='rtitle' style='font-size:10px;'>\" + escHtml(e.protein_name || '') + \"</div>\" +")
+
+    L("                \"<div class='rdate' style='font-size:9px;color:var(--muted);'>\" + e.gene_name + \"</div>\";")
+
+    L("            var delBtn2 = document.createElement('button');")
+    L("            delBtn2.textContent = 'x';")
+    L("            delBtn2.style.cssText = 'position:absolute;right:4px;top:4px;width:16px;height:16px;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.4);border-radius:3px;color:var(--danger);font-size:9px;cursor:pointer;line-height:1;padding:0;opacity:0.7;';")
+    L("            delBtn2.onclick = (function(uid) { return function(ev) { ev.stopPropagation(); if(confirm('Delete ' + uid + '?')) deleteEval(uid); }; })(e.uniprot_id);")
+    L("            item.style.cssText = 'position:relative;padding-right:28px;';")
+    L("            item.appendChild(delBtn2);")
+    L("            item.onclick = (function(uid) { return function() { onEvalClick(uid); }; })(e.uniprot_id);")
+    L("            list.appendChild(item);")
+    L("        }")
+    L("    });")
+    L("}")
+
+    L("// Updated onEvalClick: batch-aware")
+    L("async function onEvalClick(uniprotId) {")
+    L("    activeEvalId = uniprotId;")
+    L("    activeEvalMethod = \'all\';")
+    L("    activeEvalPdbSearch = \'\';")
+    L("    document.getElementById(\'sel-eval-main-method\').value = \'all\';")
+    L("    document.getElementById(\'inp-eval-search\').value = \'\';")
+    L("    var oldReportsDiv = document.getElementById(\'eval-reports-under\');")
+    L("    if (oldReportsDiv) { oldReportsDiv.remove(); }")
+    L("    var list = document.getElementById(\'eval-list\');")
+    L("    var items = list.querySelectorAll(\'.report-item\');")
+    L("    var selectedItem = null;")
+    L("    items.forEach(function(i) {")
+    L("        if (i.dataset.uid === uniprotId) {")
+    L("            i.classList.add(\'active\');")
+    L("            i.style.display = \'\';")
+    L("            selectedItem = i;")
+    L("        } else {")
+    L("            i.classList.remove(\'active\');")
+    L("            i.style.display = \'none\';")
+    L("        }")
+    L("    });")
+    L("    if (selectedItem && selectedItem !== list.firstChild) {")
+    L("        list.insertBefore(selectedItem, list.firstChild);")
+    L("    }")
+    L("    document.getElementById(\'eval-back-container\').style.display = \'block\';")
+    L("    if (activeBatchId) {")
+    L("        document.getElementById(\'btn-eval-back\').textContent = \'返回批次\';")
+    L("    } else {")
+    L("        document.getElementById(\'btn-eval-back\').textContent = \'返回列表\';")
+    L("    }")
+    L("    var oldEvalReports = document.getElementById('eval-reports-under'); if(oldEvalReports) oldEvalReports.remove();")
+    L("    try {")
+    L("        var data = await fetch(\'/api/evaluations/\' + encodeURIComponent(uniprotId)).then(function(r) { return r.json(); });")
+    L("        if (data.error) {")
+    L("            currentEvalData = null;")
+    L("            currentEvalStructures = [];")
+    L("            filteredEvalStructures = [];")
+    L("            currentBlastResults = [];")
+    L("            renderEvalTable([], []);")
+    L("            return;")
+    L("        }")
+    L("        currentEvalData = data;")
+    L("        var rawStructures = data.pdb_structures || [];")
+    L("        currentEvalStructures = rawStructures.map(function(s, i) { s._origIdx = i; return s; });")
+    L("        currentBlastResults = data.blast_results || [];")
+    L("        filteredEvalStructures = currentEvalStructures.slice();")
+    L("        renderEvalTable(filteredEvalStructures, currentBlastResults);")
+    L("        var reportsDiv = document.createElement('div');")
+    L("        reportsDiv.id = 'eval-reports-under';")
+    L("        reportsDiv.style.cssText = 'padding:8px 10px;border-top:1px solid var(--border);margin-top:4px;overflow-y:auto;max-height:250px;';")
+    L("        if (selectedItem) { selectedItem.insertAdjacentElement('afterend', reportsDiv); } else { var evalList = document.getElementById('eval-list'); evalList.insertAdjacentElement('afterend', reportsDiv); }")
+    L("        await loadEvalReports();")
+    L("        renderEvalReportsInDiv(reportsDiv);")
+    L("    } catch(e) {")
+    L("        currentEvalData = null;")
+    L("        currentEvalStructures = [];")
+    L("        filteredEvalStructures = [];")
+    L("        currentBlastResults = [];")
+    L("        renderEvalTable([], []);")
+    L("    }")
+    L("}")
+    L("async function onBatchSubTargetClick(uniprotId) {")
+    L("    var st = currentBatchSubTargets.find(function(s) { return s.uniprot_id === uniprotId; });")
+    L("    if (!st) return;")
+    L("    activeEvalId = uniprotId;")
+    L("    activeBatchSubTarget = uniprotId;")
+    L("    var allStructures = [];")
+    L("    var allBlast = [];")
+    L("    if (st.pdb_structures) { for (var j=0;j<st.pdb_structures.length;j++) { st.pdb_structures[j]._subTarget = st.uniprot_id; allStructures.push(st.pdb_structures[j]); } }")
+    L("    if (st.blast_results) { for (var j=0;j<st.blast_results.length;j++) { st.blast_results[j]._subTarget = st.uniprot_id; allBlast.push(st.blast_results[j]); } }")
+    L("    currentEvalStructures = allStructures;")
+    L("    currentBlastResults = allBlast;")
+    L("    filteredEvalStructures = currentEvalStructures.slice();")
+    L("    renderEvalTable(filteredEvalStructures, currentBlastResults);")
+    L("}")
+    L("async function deleteEval(uniprotId) {")
+    L("    if (!confirm('Delete evaluation for ' + uniprotId + '?')) return;")
+    L("    var oldEvalReports = document.getElementById('eval-reports-under'); if(oldEvalReports) oldEvalReports.remove();")
+    L("    try {")
+    L("        var res = await fetch('/api/evaluations/' + encodeURIComponent(uniprotId), {method: 'DELETE'});")
+    L("        if (res.ok) {")
+    L("            var evals = await fetch('/api/evaluations').then(function(r){return r.json();});")
+    L("            renderEvalList(evals);")
+    L("            setMode('eval');")
+    L("        } else {")
+    L("            alert('Failed to delete: ' + uniprotId);")
+    L("        }")
+    L("    } catch(e) { alert('Delete failed: ' + e); }")
+    L("}")
+    L("async function deleteBatch(batchId) {")
+    L("    if (!confirm('Delete batch ' + batchId + ' and unlink sub-targets?')) return;")
+    L("    var oldEvalReports = document.getElementById('eval-reports-under'); if(oldEvalReports) oldEvalReports.remove();")
+    L("    try {")
+    L("        var res = await fetch('/api/batches/' + encodeURIComponent(batchId), {method: 'DELETE'});")
+    L("        if (res.ok) {")
+    L("            var evals = await fetch('/api/evaluations').then(function(r){return r.json();});")
+    L("            renderEvalList(evals);")
+    L("            setMode('eval');")
+    L("        } else {")
+    L("            alert('Failed to delete batch: ' + batchId);")
+    L("        }")
+    L("    } catch(e) { alert('Delete batch failed: ' + e); }")
+    L("}")
+    L("window.deleteEval = deleteEval;")
+    L("window.deleteBatch = deleteBatch;")
+
+    L("// Updated btn-eval-back: handles both batch and eval return")
+    L("document.getElementById(\'btn-eval-back\').onclick = function() {")
+    L("    if (activeBatchId) {")
+    L("        activeBatchId = null;")
+    L("        currentBatchData = null;")
+    L("        currentBatchSubTargets = [];")
+    L("        document.querySelectorAll(\'#eval-list .report-item\').forEach(function(i) {")
+    L("            i.style.display = \'\';")
+    L("            i.classList.remove(\'active\');")
+    L("        });")
+    L("        var oldSubs = document.querySelectorAll(\'.sub-target-item\');")
+    L("        oldSubs.forEach(function(s) { s.remove(); });")
+    L("        document.getElementById(\'btn-eval-back\').textContent = \'返回列表\';")
+    L("        renderEvalTable([], []);")
+    L("        document.getElementById(\'preview-panel\').classList.add(\'hidden\');")
+    L("    } else {")
+    L("        activeEvalId = null;")
+    L("        document.querySelectorAll(\'#eval-list .report-item\').forEach(function(i) {")
+    L("            i.style.display = \'\';")
+    L("            i.classList.remove(\'active\');")
+    L("        });")
+    L("        document.getElementById(\'eval-back-container\').style.display = \'none\';")
+    L("        var reportsDiv = document.getElementById(\'eval-reports-under\');")
+    L("        if (reportsDiv) { reportsDiv.remove(); }")
+    L("        renderEvalTable([], []);")
+    L("    }")
+    L("};")
 
     
     
@@ -309,7 +643,6 @@ def write_js():
     L("function sortEvalStructures(arr){var copy=arr.slice();for(var si=0;si<copy.length;si++){if(copy[si]._origIdx==null)copy[si]._origIdx=si;}return copy.sort(function(a,b){var col=sortCol;var av=a[col],bv=b[col];if(col==='journal_if'||col==='if'){av=(av==null||String(av).trim()===''||String(av).toLowerCase()==='unknown')?0:parseFloat(av);bv=(bv==null||String(bv).trim()===''||String(bv).toLowerCase()==='unknown')?0:parseFloat(bv);return sortAsc?(av-bv):(bv-av);}if(col==='resolution'){av=(av==null||String(av).trim()===''||isNaN(parseFloat(av)))?999:parseFloat(av);bv=(bv==null||String(bv).trim()===''||isNaN(parseFloat(bv)))?999:parseFloat(bv);return sortAsc?(av-bv):(bv-av);}var an=parseFloat(av),bn=parseFloat(bv);var aNum=(av!=null&&String(av).trim()!==''&&!isNaN(an));var bNum=(bv!=null&&String(bv).trim()!==''&&!isNaN(bn));var cmp;if(aNum&&bNum){cmp=an-bn;}else if(aNum){cmp=-1;}else if(bNum){cmp=1;}else{cmp=String(av||'').localeCompare(String(bv||''));}return sortAsc?cmp:-cmp;});}")
     L("document.getElementById('btn-mode-weekly').onclick=function(){setMode('weekly');};")
     L("document.getElementById('btn-mode-eval').onclick=function(){setMode('eval');};")
-    L("document.getElementById('btn-eval-back').onclick=function(){activeEvalId=null;document.querySelectorAll('#eval-list .report-item').forEach(function(i){i.style.display='';i.classList.remove('active');});document.getElementById('eval-back-container').style.display='none';var reportsDiv=document.getElementById('eval-reports-under');if(reportsDiv){reportsDiv.remove();}renderEvalTable([],[]);};")
     L("var activeEvalMethod='all';var activeEvalPdbSearch='';var filteredEvalStructures=[];")
     L("function filterEvalStructures(){if(!currentEvalStructures)return [];var filtered=currentEvalStructures.slice();if(activeEvalMethod!=='all'){filtered=filtered.filter(function(s){var m=(s.method||'').toLowerCase();if(activeEvalMethod==='cryoem')return /electron microscopy|cryo(?!.*crystallography)/i.test(m);if(activeEvalMethod==='electron_crystallography')return /electron crystallography/i.test(m);if(activeEvalMethod==='xray')return /x-ray|xray/i.test(m);if(activeEvalMethod==='nmr')return /nmr/i.test(m);return true;});}if(activeEvalPdbSearch){var q=activeEvalPdbSearch.toLowerCase();filtered=filtered.filter(function(s){var pdbId=(s.pdb_id||'').toLowerCase();var title=(s.title||'').toLowerCase();return pdbId.indexOf(q)>=0||title.indexOf(q)>=0;});}return filtered;}")
     L("function renderBlastHomologs(blastResults){\nvar section=document.getElementById('blast-homologs-section');\nif(!blastResults||!blastResults.length){section.classList.remove('visible');section.innerHTML='';return;}\nsection.classList.add('visible');\nvar html='<div class=\"blast-section-header\">&#128279; \u540c\u6e90\u86cb\u767d (BLAST)<span class=\"blast-count-badge\">'+blastResults.length+'</span></div>';\nhtml+='<div class=\"blast-table-container\"><table class=\"blast-table\"><thead><tr><th>PDB</th><th>Method</th><th>Res</th><th>IF</th><th>Identity</th><th>E-value</th><th>Description</th></tr></thead><tbody>';\nfor(var i=0;i<blastResults.length;i++){\nvar b=blastResults[i];\nvar pdbId=escHtml(b.pdb_id||'-');\nvar method=escHtml(b.method||'-');\nvar res=b.resolution!=null?b.resolution.toFixed(1)+' ':'-';\nvar jif=b.journal_if?'<span class=\"if-badge\">'+b.journal_if.toFixed(1)+'</span>':'-';\nvar identityRaw=b.identity||0;var identityPct=b.query_coverage>0?Math.round((identityRaw/b.query_coverage)*100):identityRaw;var identity=identityPct>100?100:identityPct;\nvar evalue=b.evalue!=null?b.evalue.toExponential(1):'-';\nvar desc=escHtml((b.title||b.title||b.description||'').substring(0,80));\nvar idClass=identity>=70?'high':identity>=40?'mid':'low';\nhtml+='<tr>';\nhtml+='<td><span class=\"blast-pdb-link\" data-pdb=\"'+pdbId+'\">'+pdbId+'</span> <span class=\"homolog-badge\">\u540c\u6e90</span></td>';\nhtml+='<td class=\"blast-method\">'+method+'</td>';\nhtml+='<td class=\"blast-res\">'+res+'</td>';\nhtml+='<td class=\"blast-if\">'+jif+'</td>';\nhtml+='<td><span class=\"blast-identity '+idClass+'\">'+identity+'</span></td>';\nhtml+='<td><span class=\"blast-evalue\">'+evalue+'</span></td>';\nhtml+='<td class=\"blast-desc\" title=\"'+escHtml(b.title||b.description||'')+'\">'+desc+'</td>';\nhtml+='</tr>';\n}\nhtml+='</tbody></table></div>';\nsection.innerHTML=html;\nsection.querySelectorAll('.blast-pdb-link').forEach(function(el){el.onclick=function(){var pdb=el.getAttribute('data-pdb');if(pdb)showPdbPreview(pdb);};});\n}");
@@ -578,6 +911,41 @@ def init_eval_db():
         ON evaluation_blast_results(uniprot_id)
     """)
 
+    # evaluation_batches table: groups multiple evaluations under one batch
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS evaluation_batches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id TEXT UNIQUE,
+            title TEXT DEFAULT '',
+            combined_report TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        )
+    """)
+
+    # Migrate: add batch_id column to evaluations if it doesn't exist
+    try:
+        cursor = conn.execute("PRAGMA table_info(evaluations)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+        if 'batch_id' not in existing_cols:
+            conn.execute('ALTER TABLE evaluations ADD COLUMN batch_id TEXT')
+            logging.info('[init_eval_db] Added batch_id column to evaluations')
+    except Exception as e:
+        logging.warning(f'[init_eval_db] batch_id migration error: {e}')
+
+    # Migrate: add combined_report column to evaluation_batches if doesn't exist
+    try:
+        cursor = conn.execute("PRAGMA table_info(evaluation_batches)")
+        batch_cols = {row[1] for row in cursor.fetchall()}
+        if 'combined_report' not in batch_cols:
+            conn.execute('ALTER TABLE evaluation_batches ADD COLUMN combined_report TEXT DEFAULT ""')
+            logging.info('[init_eval_db] Added combined_report column to evaluation_batches')
+    except Exception as e:
+        logging.warning(f'[init_eval_db] combined_report migration error: {e}')
+
+    # Migrate: add batch_id index
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_evaluations_batch ON evaluations(batch_id)")
+
     # Migrate: add missing columns to evaluation_blast_results if they don't exist
     _migrate_blast_results_table(conn)
 
@@ -625,15 +993,15 @@ def api_entries():
     if week_id != "all":
         snap = conn.execute("SELECT week_start, week_end FROM weekly_snapshots WHERE week_id = ?", (week_id,)).fetchone()
         if snap:
-            q = "SELECT * FROM pdb_structures WHERE release_date BETWEEN ? AND ?"
+            q = "SELECT pdb_id, method, release_date, resolution, resolution_high, title, doi, journal, journal_if, authors, organisms, ligands, pubmed_id, fetch_date, week_id, assembly, polymer_entities, chain_count, ligand_info, ligand_names FROM pdb_structures WHERE release_date BETWEEN ? AND ?"
             params = [snap["week_start"], snap["week_end"]]
             logging.info(f"[api_entries] week={week_id} date_range={snap['week_start']} to {snap['week_end']}")
         else:
-            q = "SELECT * FROM pdb_structures WHERE week_id = ?"
+            q = "SELECT pdb_id, method, release_date, resolution, resolution_high, title, doi, journal, journal_if, authors, organisms, ligands, pubmed_id, fetch_date, week_id, assembly, polymer_entities, chain_count, ligand_info, ligand_names FROM pdb_structures WHERE week_id = ?"
             params = [week_id]
             logging.info(f"[api_entries] week={week_id} (fallback to week_id column)")
     else:
-        q = "SELECT * FROM pdb_structures WHERE 1=1"
+        q = "SELECT pdb_id, method, release_date, resolution, resolution_high, title, doi, journal, journal_if, authors, organisms, ligands, pubmed_id, fetch_date, week_id, assembly, polymer_entities, chain_count, ligand_info, ligand_names FROM pdb_structures WHERE 1=1"
         logging.info(f"[api_entries] week=all (no filter)")
     if method == "cryoem":
         q += " AND is_cryoem = 1"
@@ -707,6 +1075,32 @@ def api_report():
         return jsonify({"error": f"Report '{name}' not found"}), 404
     except Exception as e:
         logging.error(f"[api_report] error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/report/<int:report_id>")
+def api_report_by_id(report_id):
+    """Get a weekly PDB report by database ID. Returns JSON with content."""
+    try:
+        conn = get_eval_db()
+        row = conn.execute(
+            "SELECT id, week_id, title, filename, report_type, content, created_at FROM weekly_reports WHERE id = ?",
+            (report_id,)
+        ).fetchone()
+        conn.close()
+        if row:
+            rd = dict(row)
+            return jsonify({
+                "id": rd.get('id'),
+                "weekId": rd.get('week_id'),
+                "title": rd.get('title'),
+                "filename": rd.get('filename'),
+                "reportType": rd.get('report_type'),
+                "content": rd.get('content'),
+                "createdAt": rd.get('created_at'),
+            })
+        return jsonify({"error": "Report not found"}), 404
+    except Exception as e:
+        logging.error(f"[api_report_by_id] error: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/api/ligand/<code>")
@@ -783,6 +1177,121 @@ def api_ligand(code):
         pass
 
     return jsonify(result)
+
+@app.route("/api/entities/<pdb_id>")
+def api_entities(pdb_id):
+    import urllib.request, json
+    pdb_id = pdb_id.upper()
+    result = {"pdb_id": pdb_id, "entities": [], "chains": [], "assembly": None, "polymer_entities": 0, "chain_count": 0}
+
+    # Try local database first
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+
+        # Get assembly/polymer/chain data from pdb_structures
+        cursor2 = conn.execute(
+            "SELECT assembly, polymer_entities, chain_count FROM pdb_structures WHERE pdb_id = ?", (pdb_id,)
+        )
+        struct_row = cursor2.fetchone()
+        if struct_row:
+            result["assembly"] = struct_row[0]
+            result["polymer_entities"] = struct_row[1] or 0
+            result["chain_count"] = struct_row[2] or 0
+
+        cursor.execute("""
+            SELECT entity_id, asym_id, molecule_type, chain, description, organism, gene_name, sequence, length, is_ligand
+            FROM pdb_entities WHERE pdb_id = ? ORDER BY entity_id, chain
+        """, (pdb_id,))
+        rows = cursor.fetchall()
+        if rows:
+            entities_map = {}
+            for r in rows:
+                entity_id, asym_id, mol_type, chain, desc, org, gene, seq, length, is_ligand = r
+                if entity_id not in entities_map:
+                    entities_map[entity_id] = {
+                        "entity_id": entity_id,
+                        "molecule_type": mol_type,
+                        "description": desc,
+                        "organism": org,
+                        "gene_name": gene,
+                        "chains": []
+                    }
+                entities_map[entity_id]["chains"].append({
+                    "chain": chain,
+                    "asym_id": asym_id,
+                    "length": length
+                })
+            result["entities"] = list(entities_map.values())
+            result["source"] = "local"
+            return jsonify(result)
+    except Exception as e:
+        pass
+
+    # Fetch from PDBe API
+    try:
+        url = f"https://www.ebi.ac.uk/pdbe/api/pdb/entry/molecules/{pdb_id.lower()}"
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            entities_data = data.get(pdb_id.lower(), [])
+            
+            entities_list = []
+            for ent in entities_data:
+                entity_id = ent.get("entity_id")
+                mol_type = ent.get("molecule_type", "")
+                names = ent.get("molecule_name", [])
+                desc = names[0] if names else ent.get("synonym", "")
+                genes = ent.get("gene_name", [])
+                gene = genes[0] if genes else ""
+                sources = ent.get("source", [])
+                org = sources[0].get("organism_scientific_name", "") if sources else ""
+                in_chains = ent.get("in_chains", [])
+                length = ent.get("length", 0)
+                
+                chains_list = []
+                for chain in in_chains:
+                    chains_list.append({"chain": chain, "asym_id": chain, "length": length})
+                
+                entities_list.append({
+                    "entity_id": entity_id,
+                    "molecule_type": mol_type,
+                    "description": desc,
+                    "organism": org,
+                    "gene_name": gene,
+                    "chains": chains_list
+                })
+            
+            result["entities"] = entities_list
+            result["source"] = "pdbe"
+            
+            # Save to local database for future use
+            try:
+                conn = get_db()
+                for ent in entities_data:
+                    entity_id = ent.get("entity_id")
+                    mol_type = ent.get("molecule_type", "")
+                    names = ent.get("molecule_name", [])
+                    desc = names[0] if names else ent.get("synonym", "")
+                    genes = ent.get("gene_name", [])
+                    gene = genes[0] if genes else ""
+                    sources = ent.get("source", [])
+                    org = sources[0].get("organism_scientific_name", "") if sources else ""
+                    in_chains = ent.get("in_chains", [])
+                    length = ent.get("length", 0)
+                    for chain in in_chains:
+                        conn.execute("""
+                            INSERT OR REPLACE INTO pdb_entities 
+                            (pdb_id, entity_id, asym_id, molecule_type, chain, description, organism, gene_name, sequence, length)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?)
+                        """, (pdb_id, entity_id, chain, mol_type, chain, desc, org, gene, length))
+                conn.commit()
+            except Exception:
+                pass
+            
+            return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e), "pdb_id": pdb_id, "entities": [], "chains": []}), 500
 
 @app.route("/pdb_app.js")
 def serve_js():
@@ -953,11 +1462,12 @@ def save_evaluation(result: dict) -> bool:
 
         # --- Write to SQLite ---
         conn = get_eval_db()
+        batch_id = result.get('batch_id', '') or ''
         conn.execute("""
             INSERT OR REPLACE INTO evaluations
             (uniprot_id, entry_name, protein_name, gene_names, organism, sequence_length,
-             coverage, scores, report, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             coverage, scores, report, created_at, updated_at, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             uniprot_id,
             uniprot.get('entry_name', '') or result.get('entry_name', ''),
@@ -970,6 +1480,7 @@ def save_evaluation(result: dict) -> bool:
             result.get('report', ''),
             result.get('created_at', now),
             now,
+            batch_id,
         ))
 
         # Delete old PDB structures within the same transaction
@@ -1235,36 +1746,88 @@ def _normalize_scores(raw: dict) -> dict:
     return normalized
 
 def list_evaluations(search: str = "") -> list:
-    """List all saved evaluations from SQLite, with optional search filter."""
+    """List all saved evaluations and batch groups from SQLite, with optional search filter.
+    Returns a mixed list where batch entries have is_batch:true and individual entries have is_batch:false.
+    """
     import json as _json
     try:
         conn = get_eval_db()
+
+        # --- Fetch all batches ---
+        batch_rows = conn.execute("""
+            SELECT b.*,
+                   COUNT(e.uniprot_id) as sub_target_count,
+                   MAX(e.created_at) as latest_sub_created
+            FROM evaluation_batches b
+            LEFT JOIN evaluations e ON e.batch_id = b.batch_id
+            GROUP BY b.batch_id
+            ORDER BY b.created_at DESC
+        """).fetchall()
+
+        # --- Fetch all evaluations ---
         if search:
             q = f"%{search}%"
-            rows = conn.execute("""
+            eval_rows = conn.execute("""
                 SELECT e.*, COUNT(p.pdb_id) as pdb_count
                 FROM evaluations e
                 LEFT JOIN evaluation_pdb_structures p ON e.uniprot_id = p.uniprot_id
-                WHERE e.uniprot_id LIKE ? OR e.protein_name LIKE ? OR e.gene_names LIKE ? OR e.organism LIKE ?
+                WHERE e.batch_id IS NULL
+                  AND (e.uniprot_id LIKE ? OR e.protein_name LIKE ? OR e.gene_names LIKE ? OR e.organism LIKE ?)
                 GROUP BY e.uniprot_id
                 ORDER BY e.created_at DESC
             """, (q, q, q, q)).fetchall()
         else:
-            rows = conn.execute("""
+            eval_rows = conn.execute("""
                 SELECT e.*, COUNT(p.pdb_id) as pdb_count
                 FROM evaluations e
                 LEFT JOIN evaluation_pdb_structures p ON e.uniprot_id = p.uniprot_id
+                WHERE e.batch_id IS NULL
                 GROUP BY e.uniprot_id
                 ORDER BY e.created_at DESC
             """).fetchall()
         conn.close()
 
         results = []
-        for row in rows:
+
+        # Add batch entries first
+        for row in batch_rows:
+            rd = dict(row)
+            # Compute aggregate scores across sub-targets
+            if rd.get('batch_id'):
+                conn2 = get_eval_db()
+                sub_rows = conn2.execute(
+                    "SELECT scores FROM evaluations WHERE batch_id = ?", (rd['batch_id'],)
+                ).fetchall()
+                conn2.close()
+            else:
+                sub_rows = []
+            best_score = 0
+            for sr in sub_rows:
+                try:
+                    sc = _json.loads(sr[0] or '{}')
+                    for v in sc.values():
+                        if isinstance(v, dict) and v.get('score', 0) > best_score:
+                            best_score = v['score']
+                except:
+                    pass
+            score_color = 'var(--success)' if best_score >= 7 else 'var(--accent)' if best_score >= 5 else 'var(--danger)'
+            results.append({
+                'is_batch': True,
+                'batch_id': rd.get('batch_id') or '',
+                'title': rd.get('title') or rd.get('batch_id') or 'Batch',
+                'sub_target_count': rd.get('sub_target_count') or 0,
+                'combined_report': rd.get('combined_report') or '',
+                'best_score': best_score,
+                'score_color': score_color,
+                'created': rd.get('created_at') or rd.get('latest_sub_created') or '',
+            })
+
+        # Add individual (non-batch) evaluation entries
+        for row in eval_rows:
             rd = dict(row)
             gene_str = rd.get('gene_names') or ''
-            gene_list = gene_str.split(', ') if gene_str else []
             results.append({
+                'is_batch': False,
                 'uniprot_id': rd['uniprot_id'],
                 'protein_name': rd.get('protein_name') or '',
                 'gene_name': gene_str,
@@ -1275,7 +1838,7 @@ def list_evaluations(search: str = "") -> list:
                 'created': rd.get('created_at') or '',
             })
 
-        logging.info(f"[list_evaluations] search='{search}' returning {len(results)} results")
+        logging.info(f"[list_evaluations] search='{search}' returning {len(results)} results ({len(batch_rows)} batches + {len(eval_rows)} individual)")
         return results
     except Exception as e:
         logging.error(f"[list_evaluations] error: {e}")
@@ -2239,6 +2802,8 @@ def api_evaluation_report_put(uniprot_id: str):
         return jsonify({"error": "Invalid UniProt ID"}), 400
     try:
         report_content = request.get_data(as_text=True)
+        # Normalize literal \\n (backslash+n) to real newlines for proper markdown parsing
+        report_content = report_content.replace('\\n', '\n')
         if not report_content or len(report_content) < 20:
             return jsonify({"error": "Report content too short"}), 400
         title_match = re.search(r'^#\s+(.+)$', report_content, re.MULTILINE)
@@ -2250,6 +2815,29 @@ def api_evaluation_report_put(uniprot_id: str):
     except Exception as e:
         logging.error(f"[api_evaluation_report_put] error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+def _normalize_eval_markdown(content: str) -> str:
+    """Normalize single-line markdown by inserting newlines before headings."""
+    if not content:
+        return content
+    lines = []
+    for line in content.split('\n'):
+        result = []
+        i = 0
+        while i < len(line):
+            m = re.search(r'(?<=[^\n])#{1,6} ', line[i:])
+            if m and m.start() > 0:
+                result.append(line[i:i+m.start()])
+                result.append('\n')
+                result.append(line[i+m.start():i+m.end()])
+                i += m.end()
+            else:
+                result.append(line[i:])
+                break
+        lines.append(''.join(result))
+    return '\n'.join(lines)
+
 
 
 def _generate_evaluation_report(data: dict) -> str:
@@ -2445,6 +3033,87 @@ def api_evaluations_save():
     ok = save_evaluation(data)
     return jsonify({"success": ok})
 
+@app.route("/api/evaluations/batch", methods=["POST"])
+def api_evaluations_batch():
+    """Run batch evaluation for multiple UniProt IDs. POST body: {uniprot_ids: [str], combined_report: str}"""
+    data = request.get_json() or {}
+    uniprot_ids = data.get('uniprot_ids', [])
+    combined_report = data.get('combined_report', '') or ''
+    if not uniprot_ids or not isinstance(uniprot_ids, list) or len(uniprot_ids) < 1:
+        return jsonify({'success': False, 'error': 'uniprot_ids (list) required'}), 400
+
+    # Generate batch_id from first ID + count
+    import hashlib
+    from datetime import datetime
+    batch_id = hashlib.md5((','.join(uniprot_ids) + datetime.now().isoformat()).encode()).hexdigest()[:12]
+    batch_id = f"batch-{batch_id}"
+
+    # Save each evaluation with batch_id
+    results = []
+    for uid in uniprot_ids:
+        result_data = {'uniprot_id': uid, 'batch_id': batch_id}
+        # Fetch evaluation data (from existing DB or compute)
+        try:
+            from evaluation_engine import EvaluationEngine
+            engine = EvaluationEngine()
+            eval_result = engine.evaluate(uid, force_blast=False)
+            eval_result['batch_id'] = batch_id
+            ok = save_evaluation(eval_result)
+            results.append({'uniprot_id': uid, 'saved': ok})
+        except Exception as e:
+            logging.error(f"[api_evaluations_batch] failed {uid}: {e}")
+            results.append({'uniprot_id': uid, 'saved': False, 'error': str(e)})
+
+    # Create the batch entry
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    try:
+        conn = get_eval_db()
+        conn.execute("""
+            INSERT OR REPLACE INTO evaluation_batches
+            (batch_id, title, combined_report, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(batch_id) DO UPDATE SET
+                title=excluded.title, combined_report=excluded.combined_report, updated_at=excluded.updated_at
+        """, (batch_id, f"Batch ({len(uniprot_ids)} targets)", combined_report, now, now))
+        conn.commit()
+        conn.close()
+        logging.info(f"[api_evaluations_batch] created batch {batch_id} with {len(uniprot_ids)} targets")
+        return jsonify({'success': True, 'batch_id': batch_id, 'results': results})
+    except Exception as e:
+        logging.error(f"[api_evaluations_batch] batch creation error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route("/api/evaluations/<uniprot_id>", methods=["DELETE"])
+def api_evaluation_delete(uniprot_id):
+    """Delete an evaluation and its associated batch membership."""
+    try:
+        conn = get_eval_db()
+        conn.execute("DELETE FROM evaluation_pdb_structures WHERE uniprot_id = ?", (uniprot_id,))
+        conn.execute("DELETE FROM evaluation_blast_results WHERE uniprot_id = ?", (uniprot_id,))
+        conn.execute("DELETE FROM evaluations WHERE uniprot_id = ?", (uniprot_id,))
+        conn.commit()
+        conn.close()
+        logging.info(f"[api_evaluation_delete] deleted {uniprot_id}")
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"[api_evaluation_delete] error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route("/api/batches/<batch_id>", methods=["DELETE"])
+def api_batch_delete(batch_id):
+    """Delete a batch and unlink all its sub-target evaluations."""
+    try:
+        conn = get_eval_db()
+        conn.execute("UPDATE evaluations SET batch_id = NULL WHERE batch_id = ?", (batch_id,))
+        conn.execute("DELETE FROM evaluation_batches WHERE batch_id = ?", (batch_id,))
+        conn.commit()
+        conn.close()
+        logging.info(f"[api_batch_delete] deleted batch {batch_id}")
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"[api_batch_delete] error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route("/api/evaluations/<uniprot_id>/structures")
 def api_evaluation_structures(uniprot_id):
     """Get PDB structures for an evaluation from SQLite DB."""
@@ -2538,11 +3207,183 @@ def api_evaluation_report():
             ).fetchone()
         conn.close()
         if row and row['content']:
-            return Response(row['content'], mimetype="text/markdown; charset=utf-8")
+            normalized = _normalize_eval_markdown(row['content'])
+            return Response(normalized, mimetype="text/markdown; charset=utf-8")
         return jsonify({"error": "Evaluation report not found"}), 404
     except Exception as e:
         logging.error(f"[api_evaluation_report] error: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Batch Evaluation API ───────────────────────────────────────────────────
+
+@app.route("/api/batches", methods=["GET"])
+def api_batches_list():
+    """List all evaluation batches."""
+    try:
+        conn = get_eval_db()
+        rows = conn.execute("""
+            SELECT b.*,
+                   COUNT(e.uniprot_id) as sub_target_count
+            FROM evaluation_batches b
+            LEFT JOIN evaluations e ON e.batch_id = b.batch_id
+            GROUP BY b.batch_id
+            ORDER BY b.created_at DESC
+        """).fetchall()
+        conn.close()
+        result = []
+        for row in rows:
+            rd = dict(row)
+            result.append({
+                'batch_id': rd.get('batch_id') or '',
+                'title': rd.get('title') or rd.get('batch_id') or 'Batch',
+                'combined_report': rd.get('combined_report') or '',
+                'sub_target_count': rd.get('sub_target_count') or 0,
+                'created': rd.get('created_at') or '',
+            })
+        return jsonify(result)
+    except Exception as e:
+        logging.error(f"[api_batches_list] error: {e}")
+        return jsonify([])
+
+
+@app.route("/api/batches", methods=["POST"])
+def api_batches_create():
+    """Create or update a batch. POST body: {batch_id, title, combined_report, sub_target_ids[]}"""
+    data = request.get_json() or {}
+    batch_id = data.get('batch_id', '').strip()
+    if not batch_id:
+        return jsonify({'success': False, 'error': 'batch_id required'}), 400
+    title = data.get('title', '') or batch_id
+    combined_report = data.get('combined_report', '') or ''
+    sub_target_ids = data.get('sub_target_ids', []) or []
+    from datetime import datetime
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    try:
+        conn = get_eval_db()
+        conn.execute("""
+            INSERT OR REPLACE INTO evaluation_batches
+            (batch_id, title, combined_report, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(batch_id) DO UPDATE SET
+                title=excluded.title,
+                combined_report=excluded.combined_report,
+                updated_at=excluded.updated_at
+        """, (batch_id, title, combined_report, now, now))
+        # Update sub_targets to point to this batch
+        if sub_target_ids:
+            placeholders = ','.join(['?'] * len(sub_target_ids))
+            conn.execute(
+                f"UPDATE evaluations SET batch_id=? WHERE uniprot_id IN ({placeholders})",
+                [batch_id] + list(sub_target_ids)
+            )
+        conn.commit()
+        conn.close()
+        logging.info(f"[api_batches_create] batch={batch_id} with {len(sub_target_ids)} sub-targets")
+        return jsonify({'success': True, 'batch_id': batch_id})
+    except Exception as e:
+        logging.error(f"[api_batches_create] error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route("/api/batches/<batch_id>", methods=["GET"])
+def api_batch_get(batch_id):
+    """Get batch detail with all sub-target evaluations."""
+    try:
+        conn = get_eval_db()
+        batch_row = conn.execute(
+            "SELECT * FROM evaluation_batches WHERE batch_id = ?", (batch_id,)
+        ).fetchone()
+        if not batch_row:
+            conn.close()
+            return jsonify({'error': 'Batch not found'}), 404
+        sub_rows = conn.execute("""
+            SELECT e.*, COUNT(p.pdb_id) as pdb_count
+            FROM evaluations e
+            LEFT JOIN evaluation_pdb_structures p ON e.uniprot_id = p.uniprot_id
+            WHERE e.batch_id = ?
+            GROUP BY e.uniprot_id
+            ORDER BY e.created_at DESC
+        """, (batch_id,)).fetchall()
+        import json as _json
+        sub_targets = []
+        for row in sub_rows:
+            rd = dict(row)
+            uid = rd['uniprot_id']
+            # Fetch PDB structures for this sub-target (in same conn before close)
+            pdb_rows = conn.execute(
+                "SELECT * FROM evaluation_pdb_structures WHERE uniprot_id = ? ORDER BY pdb_id", (uid,)
+            ).fetchall()
+            pdb_structures = []
+            for pr in pdb_rows:
+                pd = dict(pr)
+                pdb_structures.append({
+                    'pdb_id': pd['pdb_id'], 'method': pd['method'] or '', 'resolution': pd['resolution'],
+                    'title': pd['title'] or '', 'deposition_date': pd['deposition_date'] or '',
+                    'release_date': pd['release_date'] or '', 'ligand': pd['ligand'] or '',
+                    'journal_if': pd['journal_if'], 'if_tier': pd['if_tier'] or 'unknown'
+                })
+            # Fetch BLAST results for this sub-target
+            blast_rows = conn.execute(
+                "SELECT * FROM evaluation_blast_results WHERE uniprot_id = ? ORDER BY pdb_id", (uid,)
+            ).fetchall()
+            blast_results = []
+            for br in blast_rows:
+                bd = dict(br)
+                blast_results.append({
+                    'pdb_id': bd['pdb_id'] or '', 'method': bd['method'] or '',
+                    'resolution': bd['resolution'], 'title': bd['description'] or '',
+                    'identity': bd['identity'], 'evalue': bd['evalue'],
+                    'query_coverage': bd['query_coverage'], 'target_coverage': bd['target_coverage'],
+                    'journal_if': bd['journal_if'], 'if_tier': bd['if_tier'] or 'unknown',
+                    'ligand': bd['ligand'] or '', 'release_date': bd['release_date'] or ''
+                })
+            sub_targets.append({
+                'uniprot_id': uid,
+                'protein_name': rd.get('protein_name') or '',
+                'gene_name': rd.get('gene_names') or '',
+                'organism': rd.get('organism') or '',
+                'pdb_count': rd.get('pdb_count') or 0,
+                'coverage': rd.get('coverage') or 0,
+                'scores': _normalize_scores(_json.loads(rd.get('scores') or '{}') if rd.get('scores') else {}),
+                'created': rd.get('created_at') or '',
+                'pdb_structures': pdb_structures,
+                'blast_results': blast_results,
+            })
+        conn.close()  # Moved here - after all queries
+        return jsonify({
+            'batch_id': dict(batch_row).get('batch_id') or '',
+            'title': dict(batch_row).get('title') or batch_id,
+            'combined_report': dict(batch_row).get('combined_report') or '',
+            'created': dict(batch_row).get('created_at') or '',
+            'sub_targets': sub_targets,
+        })
+    except Exception as e:
+        logging.error(f"[api_batch_get] error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/batches/<batch_id>/report", methods=["PUT"])
+def api_batch_update_report(batch_id):
+    """Update combined report for a batch."""
+    data = request.get_json() or {}
+    combined_report = data.get('combined_report', '')
+    title = data.get('title', '')
+    from datetime import datetime
+    now = datetime.now().strftime('%Y-%m-%d %H:%M')
+    try:
+        conn = get_eval_db()
+        conn.execute("""
+            UPDATE evaluation_batches
+            SET combined_report=?, title=?, updated_at=?
+            WHERE batch_id=?
+        """, (combined_report, title, now, batch_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True})
+    except Exception as e:
+        logging.error(f"[api_batch_update_report] error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ─── Generate HTML + JS, then start ────────────────────────────────────────
